@@ -143,60 +143,45 @@
  * Calculates a precise required survival rate for any specific score
  * using linear interpolation between defined milestones.
  */
-const calculateDynamicThreshold = (currentScore) => {
-    // Define the curve: [Score, Required_Percentage]
-    const milestones = [
-        [0, 50],    // At 0 points, we take any risk > 50%
-        [15, 55],   // Your defined point
-        [25, 66],   // Your defined point
-        [35, 75],   // Your defined point
-        [45, 82],   // Your defined point
-        [60, 98]    // Near max score, require near certainty
-    ];
-
-    // Handle out of bounds
-    if (currentScore <= 0) return 50;
-    if (currentScore >= 60) return 98;
-
-    // Find where the current score fits between milestones
-    for (let i = 0; i < milestones.length - 1; i++) {
-        const [lowScore, lowRate] = milestones[i];
-        const [highScore, highRate] = milestones[i + 1];
-
-        if (currentScore >= lowScore && currentScore <= highScore) {
-            // Calculate progress ratio (0.0 to 1.0) between the two scores
-            const progress = (currentScore - lowScore) / (highScore - lowScore);
-            
-            // Apply that ratio to the rates
-            // Example: Score 20 is halfway between 15 and 25, so rate is halfway between 55 and 66
-            return lowRate + (progress * (highRate - lowRate));
-        }
-    }
-    return 99; // Fallback
+// Configuration: Minimum survival rate required for each specific score.
+// Index = Current Score, Value = Required % to Hit
+const RISK_TOLERANCE = {
+    0: 50,  1: 50,  2: 50,  3: 50,  4: 50,  5: 50,
+    6: 51,  7: 51,  8: 52,  9: 52,  10: 53,
+    11: 53, 12: 54, 13: 54, 14: 55, 15: 55, // Still aggressive
+    16: 56, 17: 57, 18: 58, 19: 59, 20: 60,
+    21: 61, 22: 62, 23: 63, 24: 64, 25: 66, // Mid-game shift
+    26: 67, 27: 68, 28: 69, 29: 70, 30: 71,
+    31: 72, 32: 73, 33: 74, 34: 75, 35: 76, // High stakes start
+    36: 77, 37: 78, 38: 79, 39: 80, 40: 81,
+    41: 82, 42: 83, 43: 84, 44: 85, 45: 86, // Danger zone
+    46: 88, 47: 90, 48: 92, 49: 94, 50: 95, // Only hit on sure things
+    51: 96, 52: 97, 53: 98, 54: 99, 55: 99
 };
 
 const getStrategicAdvice = (stats) => {
     const { currentScore, survivalRate, cardCount, hasSecondChance } = stats;
 
+    // RULE 1: Protected
     if (hasSecondChance) {
         return { action: "HIT", reason: "Protected", color: "#2ecc40" };
     }
 
+    // RULE 2: Flip 7 Bonus Chase (6 cards)
     if (cardCount >= 6) {
-        // Chase Flip 7 Bonus: Lower the threshold significantly
         return survivalRate >= 50 
             ? { action: "HIT", reason: "Chase Bonus", color: "#2ecc40" }
             : { action: "STOP", reason: "Risk > Bonus", color: "#ff4136" };
     }
 
-    // Get the exact required rate for this specific score
-    const requiredSurvivalRate = calculateDynamicThreshold(currentScore);
+    // RULE 3: Lookup Table Logic
+    // Default to 99% if score is higher than our table handles (55+)
+    const requiredRate = RISK_TOLERANCE[currentScore] || 99;
 
-    // Round required rate for display cleanliness in logs if needed
-    if (survivalRate >= requiredSurvivalRate) {
-        return { action: "HIT", reason: `Safe (Need >${Math.round(requiredSurvivalRate)}%)`, color: "#2ecc40" };
+    if (survivalRate >= requiredRate) {
+        return { action: "HIT", reason: `Safe (> ${requiredRate}%)`, color: "#2ecc40" };
     } else {
-        return { action: "STOP", reason: `Risky (Need >${Math.round(requiredSurvivalRate)}%)`, color: "#ff4136" };
+        return { action: "STOP", reason: `Risky (Need ${requiredRate}%)`, color: "#ff4136" };
     }
 };
 
