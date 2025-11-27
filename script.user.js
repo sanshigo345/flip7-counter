@@ -26,10 +26,8 @@
       "12card": 12, "11card": 11, "10card": 10, "9card": 9,
       "8card": 8, "7card": 7, "6card": 6, "5card": 5,
       "4card": 4, "3card": 3, "2card": 2, "1card": 1,
-      "0card": 1,
-      "flip3": 3, "Second chance": 3, "Freeze": 3,
+      "0card": 1, "double": 1, "flip3": 3, "Second chance": 3, "Freeze": 3,
       "Plus2": 1, "Plus4": 1, "Plus6": 1, "Plus8": 1, "Plus10": 1,
-      "double": 1,
     };
   };
 
@@ -142,35 +140,65 @@
   };
 
   /**
-   * Determines whether to HIT or STOP based on Expected Value thresholds.
-   */
-  const getStrategicAdvice = (stats) => {
+ * Calculates a precise required survival rate for any specific score
+ * using linear interpolation between defined milestones.
+ */
+const calculateDynamicThreshold = (currentScore) => {
+    // Define the curve: [Score, Required_Percentage]
+    const milestones = [
+        [0, 50],    // At 0 points, we take any risk > 50%
+        [15, 55],   // Your defined point
+        [25, 66],   // Your defined point
+        [35, 75],   // Your defined point
+        [45, 82],   // Your defined point
+        [60, 98]    // Near max score, require near certainty
+    ];
+
+    // Handle out of bounds
+    if (currentScore <= 0) return 50;
+    if (currentScore >= 60) return 98;
+
+    // Find where the current score fits between milestones
+    for (let i = 0; i < milestones.length - 1; i++) {
+        const [lowScore, lowRate] = milestones[i];
+        const [highScore, highRate] = milestones[i + 1];
+
+        if (currentScore >= lowScore && currentScore <= highScore) {
+            // Calculate progress ratio (0.0 to 1.0) between the two scores
+            const progress = (currentScore - lowScore) / (highScore - lowScore);
+            
+            // Apply that ratio to the rates
+            // Example: Score 20 is halfway between 15 and 25, so rate is halfway between 55 and 66
+            return lowRate + (progress * (highRate - lowRate));
+        }
+    }
+    return 99; // Fallback
+};
+
+const getStrategicAdvice = (stats) => {
     const { currentScore, survivalRate, cardCount, hasSecondChance } = stats;
 
     if (hasSecondChance) {
-      return { action: "HIT", reason: "Protected", color: "#2ecc40" };
+        return { action: "HIT", reason: "Protected", color: "#2ecc40" };
     }
 
     if (cardCount >= 6) {
-        // Chase Flip 7 Bonus
+        // Chase Flip 7 Bonus: Lower the threshold significantly
         return survivalRate >= 50 
             ? { action: "HIT", reason: "Chase Bonus", color: "#2ecc40" }
             : { action: "STOP", reason: "Risk > Bonus", color: "#ff4136" };
     }
 
-    let requiredSurvivalRate = 0;
-    if (currentScore <= 15) requiredSurvivalRate = 55;
-    else if (currentScore <= 25) requiredSurvivalRate = 66;
-    else if (currentScore <= 35) requiredSurvivalRate = 75;
-    else if (currentScore <= 45) requiredSurvivalRate = 82;
-    else requiredSurvivalRate = 88;
+    // Get the exact required rate for this specific score
+    const requiredSurvivalRate = calculateDynamicThreshold(currentScore);
 
+    // Round required rate for display cleanliness in logs if needed
     if (survivalRate >= requiredSurvivalRate) {
-      return { action: "HIT", reason: "Safe EV", color: "#2ecc40" };
+        return { action: "HIT", reason: `Safe (Need >${Math.round(requiredSurvivalRate)}%)`, color: "#2ecc40" };
     } else {
-      return { action: "STOP", reason: "High Risk", color: "#ff4136" };
+        return { action: "STOP", reason: `Risky (Need >${Math.round(requiredSurvivalRate)}%)`, color: "#ff4136" };
     }
-  };
+};
 
   // --- UI Construction ---
 
