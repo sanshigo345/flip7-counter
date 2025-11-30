@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         BGA Flip Seven Strategic Counter
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  Advanced card counter and strategy assistant for Flip Seven on BoardGameArena
+// @version      2.2
+// @description  Fixed Plus cards, Protected text, and Double logic
 // @author       Gemini/KuRRe8
 // @match        https://boardgamearena.com/*/flipseven?table=*
 // @grant        GM_addStyle
@@ -13,27 +13,45 @@
 (function () {
   "use strict";
 
+  // --- Configuration ---
+
+  // Risk Tolerance Table
+  // Index = Current Score (after multipliers), Value = Min Survival % required to Hit
+  const RISK_TOLERANCE = {
+    0: 50,  1: 50,  2: 50,  3: 50,  4: 50,  5: 50,
+    6: 51,  7: 51,  8: 52,  9: 52,  10: 53,
+    11: 53, 12: 54, 13: 54, 14: 55, 15: 55,
+    16: 56, 17: 57, 18: 58, 19: 59, 20: 60,
+    21: 61, 22: 62, 23: 63, 24: 64, 25: 66,
+    26: 67, 27: 68, 28: 69, 29: 70, 30: 71,
+    31: 72, 32: 73, 33: 74, 34: 75, 35: 76,
+    36: 77, 37: 78, 38: 79, 39: 80, 40: 81,
+    41: 82, 42: 83, 43: 84, 44: 85, 45: 86,
+    46: 88, 47: 90, 48: 92, 49: 94, 50: 95,
+    51: 96, 52: 97, 53: 98, 54: 99, 55: 99
+  };
+
   // --- Utility Functions ---
 
   const isInGameUrl = (url) => {
     return /https:\/\/boardgamearena\.com\/\d+\/flipseven\?table=\d+/.test(url);
   };
 
-  // --- Configuration & State ---
-
   const getInitialCardCounts = () => {
     return {
       "12card": 12, "11card": 11, "10card": 10, "9card": 9,
       "8card": 8, "7card": 7, "6card": 6, "5card": 5,
       "4card": 4, "3card": 3, "2card": 2, "1card": 1,
-      "0card": 1, "double": 1, "flip3": 3, "Second chance": 3, "Freeze": 3,
+      "0card": 1,
+      "flip3": 3, "Second chance": 3, "Freeze": 3,
       "Plus2": 1, "Plus4": 1, "Plus6": 1, "Plus8": 1, "Plus10": 1,
+      "double": 1,
     };
   };
 
   let globalCardCounts = null;
   let roundCardCounts = null;
-  let playerBoards = null; // Array of objects representing each player's board
+  let playerBoards = null;
   let bustedPlayers = {};
   let stayedPlayers = {};
   let frozenPlayers = {};
@@ -79,11 +97,6 @@
 
   // --- Strategy & Probability Logic ---
 
-  /**
-   * Calculates the exact survival percentage based on remaining cards in deck.
-   * @param {number} playerIndex - Index of the player to analyze.
-   * @returns {object} - { survivalRate: number, currentScore: number, cardCount: number, hasSecondChance: boolean }
-   */
   const calculatePlayerStats = (playerIndex) => {
     if (!playerBoards || !playerBoards[playerIndex]) {
       return { survivalRate: 100, currentScore: 0, cardCount: 0, hasSecondChance: false };
@@ -95,16 +108,17 @@
     let currentScore = 0;
     let cardCount = 0;
     let hasSecondChance = false;
+    let hasDouble = false;
 
-    // Calculate score and status
+    // 1. Calculate Score and Status
     Object.entries(myBoard).forEach(([key, count]) => {
       if (count > 0) {
         cardCount += count;
         
-        // Check for Second Chance
         if (key === "Second chance") hasSecondChance = true;
+        if (key === "double") hasDouble = true;
 
-        // Calculate Score
+        // Sum up points
         const numberMatch = key.match(/^(\d+)card$/);
         if (numberMatch) {
           currentScore += parseInt(numberMatch[1], 10);
@@ -114,14 +128,17 @@
       }
     });
 
-    // Calculate Probability
-    // We look at the Global Deck (globalCardCounts) to see what is actually left to draw.
+    // 2. Apply Double Multiplier
+    if (hasDouble) {
+        currentScore *= 2;
+    }
+
+    // 3. Calculate Probability
     Object.entries(globalCardCounts).forEach(([key, count]) => {
       totalCardsRemaining += count;
 
-      // If we already have this card type on our board, every copy in the deck is a Killer.
-      // Note: "Second chance" and effect cards usually don't bust you on duplicate? 
-      // Assumption: Only number cards bust on duplicate.
+      // Logic: If I have a card, duplicates in the deck are killers.
+      // (Only Number cards bust on duplicate)
       if (myBoard[key] > 0 && key.includes("card")) {
         killerCardsRemaining += count;
       }
@@ -139,51 +156,30 @@
     };
   };
 
-  /**
- * Calculates a precise required survival rate for any specific score
- * using linear interpolation between defined milestones.
- */
-// Configuration: Minimum survival rate required for each specific score.
-// Index = Current Score, Value = Required % to Hit
-const RISK_TOLERANCE = {
-    0: 50,  1: 50,  2: 50,  3: 50,  4: 50,  5: 50,
-    6: 51,  7: 51,  8: 52,  9: 52,  10: 53,
-    11: 53, 12: 54, 13: 54, 14: 55, 15: 55,
-    16: 56, 17: 57, 18: 58, 19: 59, 20: 60,
-    21: 61, 22: 62, 23: 63, 24: 64, 25: 66,
-    26: 67, 27: 68, 28: 69, 29: 70, 30: 71,
-    31: 72, 32: 73, 33: 74, 34: 75, 35: 76,
-    36: 77, 37: 78, 38: 79, 39: 80, 40: 81,
-    41: 82, 42: 83, 43: 84, 44: 85, 45: 86,
-    46: 88, 47: 90, 48: 92, 49: 94, 50: 95,
-    51: 96, 52: 97, 53: 98, 54: 99, 55: 99
-};
-
-const getStrategicAdvice = (stats) => {
+  const getStrategicAdvice = (stats) => {
     const { currentScore, survivalRate, cardCount, hasSecondChance } = stats;
 
     // RULE 1: Protected
     if (hasSecondChance) {
-        return { action: "HIT", reason: "Protected", color: "#2ecc40" };
+      return { action: "HIT (Protected)", reason: "Second Chance Active", color: "#2ecc40" };
     }
 
     // RULE 2: Flip 7 Bonus Chase (6 cards)
     if (cardCount >= 6) {
         return survivalRate >= 50 
-            ? { action: "HIT", reason: "Chase Bonus", color: "#2ecc40" }
+            ? { action: "HIT (Bonus)", reason: "Chase Flip 7", color: "#2ecc40" }
             : { action: "STOP", reason: "Risk > Bonus", color: "#ff4136" };
     }
 
-    // RULE 3: Lookup Table Logic
-    // Default to 99% if score is higher than our table handles (55+)
-    const requiredRate = RISK_TOLERANCE[currentScore] || 99;
+    // RULE 3: Lookup Table (Uses Doubled Score if applicable)
+    const requiredRate = RISK_TOLERANCE[currentScore] || 99; // Default to 99% if score > 55
 
     if (survivalRate >= requiredRate) {
-        return { action: "HIT", reason: `Safe (> ${requiredRate}%)`, color: "#2ecc40" };
+      return { action: "HIT", reason: `Safe (> ${requiredRate}%)`, color: "#2ecc40" };
     } else {
-        return { action: "STOP", reason: `Risky (Need ${requiredRate}%)`, color: "#ff4136" };
+      return { action: "STOP", reason: `Need >${requiredRate}%`, color: "#ff4136" };
     }
-};
+  };
 
   // --- UI Construction ---
 
@@ -195,7 +191,7 @@ const getStrategicAdvice = (stats) => {
         background: "rgba(240, 248, 255, 0.95)", border: "1px solid #5bb",
         borderRadius: "8px", boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
         padding: "12px", fontSize: "14px", color: "#222",
-        maxHeight: "85vh", overflowY: "auto", minWidth: "220px",
+        maxHeight: "85vh", overflowY: "auto", minWidth: "240px",
         fontFamily: "Arial, sans-serif"
     });
 
@@ -216,11 +212,10 @@ const getStrategicAdvice = (stats) => {
     Object.entries(dictionary).forEach(([key, value]) => {
       const percent = Math.round((value / totalLeft) * 100);
       let numColor = "#888";
-      if (value <= 2) numColor = "#2ecc40"; // Green (Safe to see)
-      else if (value <= 5) numColor = "#ffdc00"; // Yellow
-      else numColor = "#ff4136"; // Red (Dangerous density)
+      if (value <= 2) numColor = "#2ecc40"; 
+      else if (value <= 5) numColor = "#ffdc00"; 
+      else numColor = "#ff4136"; 
 
-      // Clean up key name for display
       const displayName = key.replace("card", "");
 
       html += `
@@ -239,11 +234,9 @@ const getStrategicAdvice = (stats) => {
     const panel = document.getElementById("flipseven-card-counter-panel");
     if (!panel) return;
 
-    // Update Deck Stats
     const deckContainer = document.getElementById("flipseven-deck-stats");
     if (deckContainer) deckContainer.innerHTML = renderDeckStats(globalCardCounts);
 
-    // Update Player Stats with Strategy
     const playerContainer = document.getElementById("flipseven-player-stats");
     if (playerContainer) {
       const playerNames = window.flipsevenPlayerNames || [];
@@ -266,7 +259,7 @@ const getStrategicAdvice = (stats) => {
               </div>
               <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px;">
                 <span style="font-size:0.85em;">Safe: <b>${stats.survivalRate}%</b></span>
-                <span style="background:${advice.color}; color:white; padding:1px 6px; border-radius:4px; font-weight:bold; font-size:11px;">
+                <span style="background:${advice.color}; color:white; padding:1px 6px; border-radius:4px; font-weight:bold; font-size:11px;" title="${advice.reason}">
                   ${advice.action}
                 </span>
               </div>
@@ -282,14 +275,12 @@ const getStrategicAdvice = (stats) => {
   const makePanelDraggable = (panel) => {
     let isDragging = false;
     let offsetX = 0, offsetY = 0;
-    
     panel.addEventListener("mousedown", (e) => {
       isDragging = true;
       offsetX = e.clientX - panel.getBoundingClientRect().left;
       offsetY = e.clientY - panel.getBoundingClientRect().top;
       document.body.style.userSelect = "none";
     });
-
     document.addEventListener("mousemove", (e) => {
       if (isDragging) {
         panel.style.left = (e.clientX - offsetX) + "px";
@@ -297,7 +288,6 @@ const getStrategicAdvice = (stats) => {
         panel.style.right = "";
       }
     });
-
     document.addEventListener("mouseup", () => {
       isDragging = false;
       document.body.style.userSelect = "";
@@ -320,7 +310,6 @@ const getStrategicAdvice = (stats) => {
     const playerCount = playerNames.length;
 
     for (let i = 0; i < playerCount; i++) {
-      // Selector adjusted for stability
       const containerSelector = `#app > div > div > div.f7_scalable.f7_scalable_zoom > div > div.f7_players_container.grid > div:nth-child(${i + 1}) > div:nth-child(3)`;
       const container = document.querySelector(containerSelector);
 
@@ -331,7 +320,8 @@ const getStrategicAdvice = (stats) => {
       const cardDivs = container.querySelectorAll(".flippable-front");
       cardDivs.forEach((frontDiv) => {
         const classList = frontDiv.className.split(" ");
-        // Check for Standard Cards (sprite-c5, sprite-c10)
+        
+        // 1. Number Cards
         const numberClass = classList.find((cls) => cls.startsWith("sprite-c"));
         if (numberClass) {
           const num = numberClass.replace("sprite-c", "");
@@ -340,12 +330,20 @@ const getStrategicAdvice = (stats) => {
              if (playerBoards[i][key] !== undefined) playerBoards[i][key]++;
           }
         }
-        // Check for Special Cards (Second Chance, etc)
+
+        // 2. Special Cards (Plus, Double, Second Chance)
         const specialClass = classList.find((cls) => cls.startsWith("sprite-s"));
         if (specialClass) {
-            // Mapping sprite classes to keys
-            if (specialClass === "sprite-sch") playerBoards[i]["Second chance"]++;
-            // Add other specials if needed for scoring logic
+            if (specialClass === "sprite-sch") {
+                playerBoards[i]["Second chance"]++;
+            } else if (specialClass === "sprite-sx2") {
+                playerBoards[i]["double"]++;
+            } else if (/^sprite-s(\d+)$/.test(specialClass)) {
+                // Catches sprite-s2, sprite-s4, etc.
+                const pVal = specialClass.match(/^sprite-s(\d+)$/)[1];
+                const pKey = "Plus" + pVal;
+                if (playerBoards[i][pKey] !== undefined) playerBoards[i][pKey]++;
+            }
         }
       });
     }
@@ -362,10 +360,8 @@ const getStrategicAdvice = (stats) => {
 
       const firstDiv = logElement.querySelector("div");
       if (!firstDiv) { logCounter++; return; }
-      
       const logText = firstDiv.innerText.trim();
 
-      // Detect New Round
       if (logText.includes("新的一轮") || /new round/gi.test(logText)) {
         clearRoundCardCounts();
         resetPlayerStates();
@@ -374,10 +370,8 @@ const getStrategicAdvice = (stats) => {
         return;
       }
 
-      // Detect Shuffle (Resets Deck)
       if (logText.includes("弃牌堆洗牌") || /shuffle/gi.test(logText)) {
         globalCardCounts = getInitialCardCounts();
-        // Subtract cards currently visible in round from the fresh deck
         Object.keys(roundCardCounts).forEach((key) => {
             if (globalCardCounts[key] !== undefined) {
                 globalCardCounts[key] = Math.max(0, globalCardCounts[key] - roundCardCounts[key]);
@@ -388,7 +382,6 @@ const getStrategicAdvice = (stats) => {
         return;
       }
 
-      // Detect Busts
       if (logText.includes("爆牌") || /bust/gi.test(logText)) {
         const nameSpan = firstDiv.querySelector("span.playername");
         if (nameSpan) {
@@ -397,7 +390,6 @@ const getStrategicAdvice = (stats) => {
         }
       }
 
-      // Detect Stays
       if (/stay/gi.test(logText)) {
         const nameSpan = firstDiv.querySelector("span.playername");
         if (nameSpan) {
@@ -406,7 +398,6 @@ const getStrategicAdvice = (stats) => {
         }
       }
 
-      // Detect Freezes
       if (/freezes/gi.test(logText)) {
         const nameSpan = firstDiv.querySelector("span.playername");
         if (nameSpan) {
@@ -415,7 +406,6 @@ const getStrategicAdvice = (stats) => {
         }
       }
 
-      // Detect Discarding Second Chance
       if ((logText.includes("第二次机会") && logText.includes("弃除")) || /second chance/gi.test(logText)) {
          if (globalCardCounts["Second chance"] > 0) {
              globalCardCounts["Second chance"]--;
@@ -423,7 +413,6 @@ const getStrategicAdvice = (stats) => {
          }
       }
 
-      // Detect Card Reveal
       const cardElement = logElement.querySelector(".visible_flippable.f7_token_card.f7_logs");
       if (cardElement) {
          let frontDiv = cardElement.children[0]?.children[0];
@@ -450,58 +439,44 @@ const getStrategicAdvice = (stats) => {
             }
          }
       }
-      
       logCounter++;
     }, 200);
   };
-
-  // --- Initialization ---
 
   const initializeGame = () => {
     globalCardCounts = getInitialCardCounts();
     roundCardCounts = Object.fromEntries(Object.keys(globalCardCounts).map((k) => [k, 0]));
     playerBoards = Array.from({ length: 12 }, () => getInitialPlayerBoard());
     resetPlayerStates();
-
     createCardCounterPanel();
     startPlayerBoardMonitor();
     startLogMonitor();
-    
-    console.log("[Flip 7 Strategic] Initialized");
+    console.log("[Flip 7 Strategic] Initialized (v2.2 - Fixes Applied)");
   };
 
   const runLogic = () => {
     setTimeout(() => {
       let playerNames = [];
-      // Attempt to find player names in top bar
       for (let i = 1; i <= 12; i++) {
         const selector = `#app > div > div > div.f7_scalable.f7_scalable_zoom > div > div.f7_players_container > div:nth-child(${i}) > div.f7_player_name.flex.justify-between > div:nth-child(1)`;
         const nameElem = document.querySelector(selector);
-        if (nameElem?.innerText?.trim()) {
-          playerNames.push(nameElem.innerText.trim());
-        } else {
-          break;
-        }
+        if (nameElem?.innerText?.trim()) playerNames.push(nameElem.innerText.trim());
+        else break;
       }
       window.flipsevenPlayerNames = playerNames;
       initializeGame();
     }, 1500);
   };
 
-  // --- SPA Navigation Handling ---
-
   const onUrlChange = () => {
     if (isInGameUrl(window.location.href)) {
-      // Clear previous panel if exists to prevent duplicates
       const existingPanel = document.getElementById("flipseven-card-counter-panel");
       if (existingPanel) existingPanel.remove();
       runLogic();
     }
   };
 
-  if (isInGameUrl(window.location.href)) {
-    runLogic();
-  }
+  if (isInGameUrl(window.location.href)) runLogic();
 
   const _pushState = history.pushState;
   const _replaceState = history.replaceState;
