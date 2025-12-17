@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         BGA Flip Seven Strategic Counter
 // @namespace    http://tampermonkey.net/
-// @version      2.2
-// @description  Fixed Plus cards, Protected text, and Double logic
+// @version      2.5
+// @description  Gold Standard Parser: Uses classList.contains() for perfect detection
 // @author       Gemini/KuRRe8
 // @match        https://boardgamearena.com/*/flipseven?table=*
 // @grant        GM_addStyle
@@ -15,8 +15,6 @@
 
   // --- Configuration ---
 
-  // Risk Tolerance Table
-  // Index = Current Score (after multipliers), Value = Min Survival % required to Hit
   const RISK_TOLERANCE = {
     0: 50,  1: 50,  2: 50,  3: 50,  4: 50,  5: 50,
     6: 51,  7: 51,  8: 52,  9: 52,  10: 53,
@@ -110,7 +108,7 @@
     let hasSecondChance = false;
     let hasDouble = false;
 
-    // 1. Calculate Score and Status
+    // 1. Calculate Score and Status from DOM data
     Object.entries(myBoard).forEach(([key, count]) => {
       if (count > 0) {
         cardCount += count;
@@ -118,7 +116,6 @@
         if (key === "Second chance") hasSecondChance = true;
         if (key === "double") hasDouble = true;
 
-        // Sum up points
         const numberMatch = key.match(/^(\d+)card$/);
         if (numberMatch) {
           currentScore += parseInt(numberMatch[1], 10);
@@ -128,17 +125,13 @@
       }
     });
 
-    // 2. Apply Double Multiplier
     if (hasDouble) {
         currentScore *= 2;
     }
 
-    // 3. Calculate Probability
+    // 2. Calculate Probability
     Object.entries(globalCardCounts).forEach(([key, count]) => {
       totalCardsRemaining += count;
-
-      // Logic: If I have a card, duplicates in the deck are killers.
-      // (Only Number cards bust on duplicate)
       if (myBoard[key] > 0 && key.includes("card")) {
         killerCardsRemaining += count;
       }
@@ -159,20 +152,17 @@
   const getStrategicAdvice = (stats) => {
     const { currentScore, survivalRate, cardCount, hasSecondChance } = stats;
 
-    // RULE 1: Protected
     if (hasSecondChance) {
       return { action: "HIT (Protected)", reason: "Second Chance Active", color: "#2ecc40" };
     }
 
-    // RULE 2: Flip 7 Bonus Chase (6 cards)
     if (cardCount >= 6) {
         return survivalRate >= 50 
             ? { action: "HIT (Bonus)", reason: "Chase Flip 7", color: "#2ecc40" }
             : { action: "STOP", reason: "Risk > Bonus", color: "#ff4136" };
     }
 
-    // RULE 3: Lookup Table (Uses Doubled Score if applicable)
-    const requiredRate = RISK_TOLERANCE[currentScore] || 99; // Default to 99% if score > 55
+    const requiredRate = RISK_TOLERANCE[currentScore] || 99; 
 
     if (survivalRate >= requiredRate) {
       return { action: "HIT", reason: `Safe (> ${requiredRate}%)`, color: "#2ecc40" };
@@ -303,7 +293,7 @@
     }
   };
 
-  // --- Data Scraping Logic ---
+  // --- Data Scraping Logic (Rewritten with classList) ---
 
   const updatePlayerBoardFromDOM = () => {
     const playerNames = window.flipsevenPlayerNames || [];
@@ -318,39 +308,46 @@
       clearPlayerBoard(i);
       
       const cardDivs = container.querySelectorAll(".flippable-front");
+      
       cardDivs.forEach((frontDiv) => {
-        const classList = frontDiv.className.split(" ");
-        
-        // 1. Number Cards
-        const numberClass = classList.find((cls) => cls.startsWith("sprite-c"));
-        if (numberClass) {
-          const num = numberClass.replace("sprite-c", "");
-          if (/^\d+$/.test(num)) {
-             const key = num + "card";
-             if (playerBoards[i][key] !== undefined) playerBoards[i][key]++;
-          }
+        // Safe check using native DOM API
+        if (frontDiv.classList.contains("sprite-sch")) {
+            playerBoards[i]["Second chance"]++;
+        }
+        if (frontDiv.classList.contains("sprite-sx2")) {
+            playerBoards[i]["double"]++;
         }
 
-        // 2. Special Cards (Plus, Double, Second Chance)
-        const specialClass = classList.find((cls) => cls.startsWith("sprite-s"));
-        if (specialClass) {
-            if (specialClass === "sprite-sch") {
-                playerBoards[i]["Second chance"]++;
-            } else if (specialClass === "sprite-sx2") {
-                playerBoards[i]["double"]++;
-            } else if (/^sprite-s(\d+)$/.test(specialClass)) {
-                // Catches sprite-s2, sprite-s4, etc.
-                const pVal = specialClass.match(/^sprite-s(\d+)$/)[1];
-                const pKey = "Plus" + pVal;
-                if (playerBoards[i][pKey] !== undefined) playerBoards[i][pKey]++;
+        // Iterator for dynamic values (Numbers and Plus cards)
+        frontDiv.classList.forEach(cls => {
+            // Number Cards: sprite-c5, sprite-c10...
+            if (cls.startsWith("sprite-c")) {
+                const num = cls.replace("sprite-c", "");
+                if (/^\d+$/.test(num)) {
+                    const key = num + "card";
+                    if (playerBoards[i][key] !== undefined) playerBoards[i][key]++;
+                }
             }
-        }
+            // Plus Cards: sprite-s2, sprite-s10...
+            else if (cls.startsWith("sprite-s")) {
+                const match = cls.match(/^sprite-s(\d+)$/);
+                if (match) {
+                    const pVal = match[1];
+                    const pKey = "Plus" + pVal;
+                    if (playerBoards[i][pKey] !== undefined) playerBoards[i][pKey]++;
+                }
+            }
+        });
       });
     }
   };
 
+  // Sync UI immediately after scraping
   const startPlayerBoardMonitor = () => {
-    setInterval(updatePlayerBoardFromDOM, 300);
+    setInterval(() => {
+        updatePlayerBoardFromDOM();
+        updateCardCounterPanel(); 
+    }, 300);
   };
 
   const startLogMonitor = () => {
@@ -451,7 +448,7 @@
     createCardCounterPanel();
     startPlayerBoardMonitor();
     startLogMonitor();
-    console.log("[Flip 7 Strategic] Initialized (v2.2 - Fixes Applied)");
+    console.log("[Flip 7 Strategic] Initialized (v2.5 - ClassList API)");
   };
 
   const runLogic = () => {
