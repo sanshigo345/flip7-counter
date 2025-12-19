@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         BGA Flip Seven Strategic Counter
 // @namespace    http://tampermonkey.net/
-// @version      2.5
-// @description  Gold Standard Parser: Uses classList.contains() for perfect detection
-// @author       Gemini/KuRRe8
+// @version      2.9
+// @description  Fix: Ignored discarded cards by enforcing "Main Row" check for numbers
+// @author       sanshigo345
 // @match        https://boardgamearena.com/*/flipseven?table=*
 // @grant        GM_addStyle
 // @grant        GM_getValue
@@ -13,20 +13,21 @@
 (function () {
   "use strict";
 
-  // --- Configuration ---
+  const SCRIPT_VERSION = "2.9";
 
+  // --- Configuration (Conservative) ---
   const RISK_TOLERANCE = {
-    0: 50,  1: 50,  2: 50,  3: 50,  4: 50,  5: 50,
-    6: 51,  7: 51,  8: 52,  9: 52,  10: 53,
-    11: 53, 12: 54, 13: 54, 14: 55, 15: 55,
-    16: 56, 17: 57, 18: 58, 19: 59, 20: 60,
-    21: 61, 22: 62, 23: 63, 24: 64, 25: 66,
-    26: 67, 27: 68, 28: 69, 29: 70, 30: 71,
-    31: 72, 32: 73, 33: 74, 34: 75, 35: 76,
-    36: 77, 37: 78, 38: 79, 39: 80, 40: 81,
-    41: 82, 42: 83, 43: 84, 44: 85, 45: 86,
-    46: 88, 47: 90, 48: 92, 49: 94, 50: 95,
-    51: 96, 52: 97, 53: 98, 54: 99, 55: 99
+    0: 55,  1: 55,  2: 55,  3: 55,  4: 55,  5: 55,
+    6: 58,  7: 58,  8: 60,  9: 60,  10: 62,
+    11: 62, 12: 64, 13: 64, 14: 65, 15: 65,
+    16: 68, 17: 68, 18: 70, 19: 70, 20: 72,
+    21: 72, 22: 74, 23: 74, 24: 76, 25: 76,
+    26: 78, 27: 78, 28: 80, 29: 80, 30: 82,
+    31: 84, 32: 84, 33: 86, 34: 86, 35: 88,
+    36: 88, 37: 90, 38: 90, 39: 92, 40: 92,
+    41: 94, 42: 94, 43: 95, 44: 95, 45: 96,
+    46: 97, 47: 97, 48: 98, 49: 98, 50: 99,
+    51: 99, 52: 99, 53: 99, 54: 99, 55: 99
   };
 
   // --- Utility Functions ---
@@ -157,7 +158,7 @@
     }
 
     if (cardCount >= 6) {
-        return survivalRate >= 50 
+        return survivalRate >= 60 
             ? { action: "HIT (Bonus)", reason: "Chase Flip 7", color: "#2ecc40" }
             : { action: "STOP", reason: "Risk > Bonus", color: "#ff4136" };
     }
@@ -186,7 +187,7 @@
     });
 
     panel.innerHTML = `
-      <div style="font-weight:bold; font-size:16px; margin-bottom:8px; text-align:center; color:#333;">Flip 7 Assistant</div>
+      <div style="font-weight:bold; font-size:16px; margin-bottom:8px; text-align:center; color:#333;">Flip 7 Assistant v${SCRIPT_VERSION}</div>
       <div id="flipseven-deck-stats"></div>
       <hr style="margin:8px 0; border:0; border-top:1px solid #ccc;">
       <div id="flipseven-player-stats"></div>
@@ -293,24 +294,28 @@
     }
   };
 
-  // --- Data Scraping Logic (Rewritten with classList) ---
+  // --- Data Scraping Logic (Strict Location Check) ---
 
   const updatePlayerBoardFromDOM = () => {
     const playerNames = window.flipsevenPlayerNames || [];
     const playerCount = playerNames.length;
 
     for (let i = 0; i < playerCount; i++) {
-      const containerSelector = `#app > div > div > div.f7_scalable.f7_scalable_zoom > div > div.f7_players_container.grid > div:nth-child(${i + 1}) > div:nth-child(3)`;
+      // 1. Get the Entire Player Container
+      const containerSelector = `#app > div > div > div.f7_scalable.f7_scalable_zoom > div > div.f7_players_container.grid > div:nth-child(${i + 1})`;
       const container = document.querySelector(containerSelector);
 
       if (!container) continue;
+
+      // 2. Identify the specific "Card Row" (usually 3rd child) to filter numbers
+      const cardRow = container.querySelector(":scope > div:nth-child(3)");
 
       clearPlayerBoard(i);
       
       const cardDivs = container.querySelectorAll(".flippable-front");
       
       cardDivs.forEach((frontDiv) => {
-        // Safe check using native DOM API
+        // A. SPECIAL CARDS (Scan Global)
         if (frontDiv.classList.contains("sprite-sch")) {
             playerBoards[i]["Second chance"]++;
         }
@@ -318,31 +323,31 @@
             playerBoards[i]["double"]++;
         }
 
-        // Iterator for dynamic values (Numbers and Plus cards)
-        frontDiv.classList.forEach(cls => {
-            // Number Cards: sprite-c5, sprite-c10...
-            if (cls.startsWith("sprite-c")) {
-                const num = cls.replace("sprite-c", "");
-                if (/^\d+$/.test(num)) {
-                    const key = num + "card";
-                    if (playerBoards[i][key] !== undefined) playerBoards[i][key]++;
+        // B. NUMBER/PLUS CARDS (Scan Strict: Must be in cardRow)
+        // If cardRow doesn't exist or card isn't inside it, ignore (it's trash/discard)
+        if (cardRow && cardRow.contains(frontDiv)) {
+            frontDiv.classList.forEach(cls => {
+                if (cls.startsWith("sprite-c")) {
+                    const num = cls.replace("sprite-c", "");
+                    if (/^\d+$/.test(num)) {
+                        const key = num + "card";
+                        if (playerBoards[i][key] !== undefined) playerBoards[i][key]++;
+                    }
                 }
-            }
-            // Plus Cards: sprite-s2, sprite-s10...
-            else if (cls.startsWith("sprite-s")) {
-                const match = cls.match(/^sprite-s(\d+)$/);
-                if (match) {
-                    const pVal = match[1];
-                    const pKey = "Plus" + pVal;
-                    if (playerBoards[i][pKey] !== undefined) playerBoards[i][pKey]++;
+                else if (cls.startsWith("sprite-s")) {
+                    const match = cls.match(/^sprite-s(\d+)$/);
+                    if (match) {
+                        const pVal = match[1];
+                        const pKey = "Plus" + pVal;
+                        if (playerBoards[i][pKey] !== undefined) playerBoards[i][pKey]++;
+                    }
                 }
-            }
-        });
+            });
+        }
       });
     }
   };
 
-  // Sync UI immediately after scraping
   const startPlayerBoardMonitor = () => {
     setInterval(() => {
         updatePlayerBoardFromDOM();
@@ -448,7 +453,7 @@
     createCardCounterPanel();
     startPlayerBoardMonitor();
     startLogMonitor();
-    console.log("[Flip 7 Strategic] Initialized (v2.5 - ClassList API)");
+    console.log(`[Flip 7 Strategic] Initialized (v${SCRIPT_VERSION})`);
   };
 
   const runLogic = () => {
